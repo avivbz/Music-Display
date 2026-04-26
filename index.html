@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#000000" />
+<title>Music Display</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    width: 100%;
+    background: #000;
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    padding: 4vh 4vw;
+    gap: 2vh;
+    height: 100vh;
+  }
+  #time {
+    flex: 0 0 auto;
+    text-align: center;
+    font-size: 24vh;
+    font-weight: 200;
+    letter-spacing: -0.03em;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  #now-playing {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: 1.4vh;
+    min-height: 0;
+    padding: 0 4vw;
+  }
+  #title {
+    font-size: 6.5vh;
+    font-weight: 600;
+    line-height: 1.1;
+    max-width: 90vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  #artist {
+    font-size: 4.2vh;
+    font-weight: 300;
+    opacity: 0.85;
+    line-height: 1.1;
+    max-width: 90vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #source {
+    font-size: 2.2vh;
+    font-weight: 500;
+    opacity: 0.5;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    margin-top: 0.5vh;
+  }
+  #buttons {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 2vw;
+    justify-content: center;
+    align-items: stretch;
+  }
+  .btn {
+    flex: 1 1 0;
+    max-width: 28vw;
+    padding: 2.4vh 2vw;
+    font-size: 2.6vh;
+    font-weight: 500;
+    background: #161616;
+    color: #fff;
+    border: 1px solid #2a2a2a;
+    border-radius: 1.6vh;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.15s ease;
+    font-family: inherit;
+  }
+  .btn:active { background: #2a2a2a; }
+  #btn-playpause { font-weight: 600; }
+  #signin-link {
+    position: fixed;
+    top: 1.2vh;
+    right: 1.5vw;
+    font-size: 1.6vh;
+    color: #1DB954;
+    opacity: 0.85;
+    background: transparent;
+    border: 1px solid #1DB954;
+    border-radius: 1vh;
+    padding: 0.6vh 1.2vw;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  #status {
+    position: fixed;
+    top: 1.2vh;
+    left: 1.5vw;
+    font-size: 1.4vh;
+    opacity: 0.35;
+    pointer-events: none;
+  }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+  <div id="status"></div>
+  <button id="signin-link" class="hidden">Sign in to Spotify</button>
+
+  <div id="time">--:--</div>
+
+  <div id="now-playing">
+    <div id="title">Not playing</div>
+    <div id="artist"></div>
+    <div id="source"></div>
+  </div>
+
+  <div id="buttons">
+    <button class="btn" id="btn-playpause">Play / Pause</button>
+    <button class="btn" id="btn-spotify">Open Spotify</button>
+    <button class="btn" id="btn-rp">Open Radio Paradise</button>
+  </div>
+
+<script>
+(() => {
+  // ====== Config ======
+  const CLIENT_ID    = '23da5fe4e62345cb9ce601f75696bbe1';
+  const REDIRECT_URI = 'https://avivbz.github.io/music-display/callback';
+  const SCOPES       = 'user-read-currently-playing user-read-playback-state user-modify-playback-state';
+  const SPOTIFY_POLL_MS = 5000;
+  const RP_POLL_MS      = 15000;
+
+  // ====== DOM ======
+  const $time   = document.getElementById('time');
+  const $title  = document.getElementById('title');
+  const $artist = document.getElementById('artist');
+  const $source = document.getElementById('source');
+  const $signin = document.getElementById('signin-link');
+  const $status = document.getElementById('status');
+
+  // ====== Clock ======
+  function updateClock() {
+    const d = new Date();
+    const h = String(d.getHours()).padStart(2, '0');
+    const m = String(d.getMinutes()).padStart(2, '0');
+    $time.textContent = `${h}:${m}`;
+  }
+  updateClock();
+  setInterval(updateClock, 1000);
+
+  // ====== State ======
+  let lastSource     = localStorage.getItem('last_source') || 'spotify'; // 'spotify' | 'rp'
+  let spotifyPlaying = false;
+  let spotifyTrack   = null; // { title, artist }
+  let rpTrack        = null; // { title, artist }
+
+  function setStatus(s) { $status.textContent = s || ''; }
+
+  // ====== PKCE helpers ======
+  function randomString(len) {
+    const arr = new Uint8Array(len);
+    crypto.getRandomValues(arr);
+    return Array.from(arr, b => ('0' + b.toString(16)).slice(-2)).join('').slice(0, len);
+  }
+  async function sha256(plain) {
+    const enc = new TextEncoder().encode(plain);
+    return await crypto.subtle.digest('SHA-256', enc);
+  }
+  function b64url(buf) {
+    let s = '';
+    const bytes = new Uint8Array(buf);
+    for (let i = 0; i < bytes.byteLength; i++) s += String.fromCharCode(bytes[i]);
+    return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  // ====== Spotify auth ======
+  async function spotifyLogin() {
+    const verifier = randomString(64);
+    localStorage.setItem('spotify_verifier', verifier);
+    const challenge = b64url(await sha256(verifier));
+    const params = new URLSearchParams({
+      client_id: CLIENT_ID,
+      response_type: 'code',
+      redirect_uri: REDIRECT_URI,
+      code_challenge_method: 'S256',
+      code_challenge: challenge,
+      scope: SCOPES
+    });
+    window.location.href = 'https://accounts.spotify.com/authorize?' + params.toString();
+  }
+
+  async function exchangeCode(code) {
+    const verifier = localStorage.getItem('spotify_verifier');
+    if (!verifier) return null;
+    const body = new URLSearchParams({
+      client_id: CLIENT_ID,
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: REDIRECT_URI,
+      code_verifier: verifier
+    });
+    try {
+      const res = await fetch('https://accounts.spotify.com/api/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body
+      });
+      const data = await res.json();
+      if (data.access_token) saveTokens(data);
+      return data;
+    } catch (e) {
+      setStatus('Token exchange failed');
+      return null;
+    }
+  }
+
+  async function refreshAccessToken() {
+    const rt = localStorage.getItem('spotify_refresh_token');
+    if (!rt) return null;
+    const body = new URLSearchParams({
+      client_id: CLIENT_ID,
+      grant_type: 'refresh_token',
+      refresh_token: rt
+    });
+    try {
+      const res = await fetch('https://accounts.spotify.com/api/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body
+      });
+      const data = await res.json();
+      if (data.access_token) {
+        saveTokens(data);
+        return data.access_token;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function saveTokens(data) {
+    localStorage.setItem('spotify_access_token', data.access_token);
+    if (data.refresh_token) {
+      localStorage.setItem('spotify_refresh_token', data.refresh_token);
+    }
+    const expiresIn = Number(data.expires_in) || 3600;
+    localStorage.setItem('spotify_expires_at', String(Date.now() + (expiresIn - 60) * 1000));
+  }
+
+  async function getValidToken() {
+    const tok = localStorage.getItem('spotify_access_token');
+    const exp = parseInt(localStorage.getItem('spotify_expires_at') || '0', 10);
+    if (tok && Date.now() < exp) return tok;
+    return await refreshAccessToken();
+  }
+
+  function isAuthed() {
+    return !!localStorage.getItem('spotify_access_token');
+  }
+
+  // ====== Spotify API ======
+  async function spotifyApi(path, method = 'GET', jsonBody = null) {
+    let token = await getValidToken();
+    if (!token) return { needsAuth: true };
+
+    const doFetch = async (t) => {
+      const opts = { method, headers: { Authorization: 'Bearer ' + t } };
+      if (jsonBody) {
+        opts.headers['Content-Type'] = 'application/json';
+        opts.body = JSON.stringify(jsonBody);
+      }
+      return fetch('https://api.spotify.com/v1' + path, opts);
+    };
+
+    let res;
+    try { res = await doFetch(token); }
+    catch (e) { return { error: 'network' }; }
+
+    if (res.status === 401) {
+      token = await refreshAccessToken();
+      if (!token) return { needsAuth: true };
+      try { res = await doFetch(token); } catch (e) { return { error: 'network' }; }
+    }
+    if (res.status === 204) return { empty: true };
+    if (!res.ok) return { error: res.status };
+    const txt = await res.text();
+    if (!txt) return { empty: true };
+    try { return JSON.parse(txt); } catch { return { empty: true }; }
+  }
+
+  // ====== Pollers ======
+  async function pollSpotify() {
+    if (!isAuthed()) return;
+    const data = await spotifyApi('/me/player/currently-playing');
+    if (data.needsAuth) {
+      $signin.classList.remove('hidden');
+      return;
+    }
+    if (data.empty || !data.item) {
+      spotifyPlaying = false;
+      // Keep last spotifyTrack so display can still show the last song if Spotify was the source.
+      render();
+      return;
+    }
+    spotifyTrack = {
+      title: data.item.name,
+      artist: (data.item.artists || []).map(a => a.name).join(', ')
+    };
+    spotifyPlaying = !!data.is_playing;
+    if (spotifyPlaying) {
+      lastSource = 'spotify';
+      localStorage.setItem('last_source', 'spotify');
+    }
+    render();
+  }
+
+  async function pollRP() {
+    try {
+      const res = await fetch('https://api.radioparadise.com/api/now_playing?chan=0', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      // Defensive: API may return slightly different field names.
+      const title  = data.title  || data.song   || data.track  || '';
+      const artist = data.artist || data.artist_name || '';
+      if (title || artist) {
+        rpTrack = { title, artist };
+        render();
+      }
+    } catch (e) {
+      // CORS / network — silent.
+    }
+  }
+
+  // ====== Render ======
+  function render() {
+    let track = null;
+    let source = '';
+
+    if (spotifyPlaying && spotifyTrack) {
+      track = spotifyTrack;
+      source = 'Spotify';
+    } else if (lastSource === 'rp' && rpTrack) {
+      track = rpTrack;
+      source = 'Radio Paradise';
+    } else if (spotifyTrack && lastSource === 'spotify') {
+      track = spotifyTrack;
+      source = 'Spotify · paused';
+    } else if (rpTrack) {
+      track = rpTrack;
+      source = 'Radio Paradise';
+    } else if (spotifyTrack) {
+      track = spotifyTrack;
+      source = 'Spotify · paused';
+    }
+
+    if (track) {
+      $title.textContent  = track.title  || '—';
+      $artist.textContent = track.artist || '';
+      $source.textContent = source;
+    } else {
+      $title.textContent  = isAuthed() ? 'Nothing playing' : 'Sign in to Spotify to begin';
+      $artist.textContent = '';
+      $source.textContent = '';
+    }
+  }
+
+  // ====== Buttons ======
+  document.getElementById('btn-playpause').addEventListener('click', async () => {
+    if (!isAuthed()) { spotifyLogin(); return; }
+    const path = spotifyPlaying ? '/me/player/pause' : '/me/player/play';
+    const r = await spotifyApi(path, 'PUT');
+    if (r && r.needsAuth) { spotifyLogin(); return; }
+    // Optimistically toggle then re-poll for accuracy.
+    spotifyPlaying = !spotifyPlaying;
+    if (spotifyPlaying) {
+      lastSource = 'spotify';
+      localStorage.setItem('last_source', 'spotify');
+    }
+    render();
+    setTimeout(pollSpotify, 700);
+  });
+
+  document.getElementById('btn-spotify').addEventListener('click', () => {
+    lastSource = 'spotify';
+    localStorage.setItem('last_source', 'spotify');
+    window.location.href = 'spotify://';
+  });
+
+  document.getElementById('btn-rp').addEventListener('click', () => {
+    lastSource = 'rp';
+    localStorage.setItem('last_source', 'rp');
+    const start = Date.now();
+    // Try the deep link; if the app isn't installed, fall back to the App Store.
+    window.location.href = 'radiopara://';
+    setTimeout(() => {
+      if (Date.now() - start < 2500 && document.visibilityState === 'visible') {
+        window.location.href = 'https://apps.apple.com/app/radio-paradise/id423894385';
+      }
+    }, 1800);
+  });
+
+  $signin.addEventListener('click', spotifyLogin);
+
+  // ====== Init / OAuth callback handoff ======
+  async function handleCallbackCode() {
+    // Code may arrive via ?code=... (if redirect URI hits this page)
+    // or via #code=... (handed off from /callback/ helper page).
+    let code = null;
+    const search = new URLSearchParams(window.location.search);
+    const hash   = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    if (search.get('code')) code = search.get('code');
+    else if (hash.get('code')) code = hash.get('code');
+
+    if (code) {
+      setStatus('Authorizing…');
+      await exchangeCode(code);
+      history.replaceState({}, '', window.location.pathname);
+      setStatus('');
+    }
+  }
+
+  async function init() {
+    await handleCallbackCode();
+
+    if (!isAuthed()) {
+      $signin.classList.remove('hidden');
+    } else {
+      $signin.classList.add('hidden');
+    }
+
+    pollSpotify();
+    pollRP();
+    setInterval(pollSpotify, SPOTIFY_POLL_MS);
+    setInterval(pollRP, RP_POLL_MS);
+
+    // Keep the iPad screen awake while the page is visible (where supported).
+    let wakeLock = null;
+    async function requestWake() {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLock = await navigator.wakeLock.request('screen');
+        }
+      } catch (e) { /* user gesture may be required */ }
+    }
+    requestWake();
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') requestWake();
+    });
+    // Also retry on first user interaction (Safari often requires a gesture).
+    document.addEventListener('click', requestWake, { once: true });
+
+    render();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>
