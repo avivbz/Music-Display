@@ -343,6 +343,15 @@
     'https://api.radioparadise.com/api/get_block?bitrate=4&info=true&chan=0'
   ];
 
+  // The RP API doesn't send CORS headers for cross-origin browsers, so we
+  // route through public CORS proxies. We try the URL directly first (in case
+  // CORS gets enabled, or one endpoint is open), then fall back to proxies.
+  const RP_PROXIES = [
+    (url) => url, // direct
+    (url) => 'https://corsproxy.io/?' + encodeURIComponent(url),
+    (url) => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url)
+  ];
+
   function extractRPTrack(data) {
     if (!data || typeof data !== 'object') return null;
 
@@ -374,23 +383,25 @@
   }
 
   async function pollRP() {
-    for (const url of RP_ENDPOINTS) {
-      try {
-        const res = await fetch(url, { cache: 'no-store' });
-        if (!res.ok) continue;
-        const data = await res.json();
-        const track = extractRPTrack(data);
-        if (track) {
-          rpTrack = track;
-          setStatus('');
-          render();
-          return;
+    for (const proxy of RP_PROXIES) {
+      for (const endpoint of RP_ENDPOINTS) {
+        try {
+          const res = await fetch(proxy(endpoint), { cache: 'no-store' });
+          if (!res.ok) continue;
+          const data = await res.json();
+          const track = extractRPTrack(data);
+          if (track) {
+            rpTrack = track;
+            setStatus('');
+            render();
+            return;
+          }
+        } catch (e) {
+          // try next combination
         }
-      } catch (e) {
-        // try the next endpoint
       }
     }
-    // All endpoints failed — surface a tiny hint in the corner.
+    // All combinations failed — surface a tiny hint in the corner.
     setStatus('RP fetch failed');
   }
 
