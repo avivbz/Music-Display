@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="theme-color" content="#000000" />
-<title>Music Display</title>
+<title>Music-Display</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
@@ -31,8 +31,8 @@
   #time {
     flex: 0 0 auto;
     text-align: center;
-    font-size: 24vh;
-    font-weight: 200;
+    font-size: 27vh;
+    font-weight: 700;
     letter-spacing: -0.03em;
     line-height: 1;
     font-variant-numeric: tabular-nums;
@@ -148,7 +148,7 @@
 (() => {
   // ====== Config ======
   const CLIENT_ID    = '23da5fe4e62345cb9ce601f75696bbe1';
-  const REDIRECT_URI = 'https://avivbz.github.io/music-display/callback';
+  const REDIRECT_URI = 'https://avivbz.github.io/Music-Display/callback';
   const SCOPES       = 'user-read-currently-playing user-read-playback-state user-modify-playback-state';
   const SPOTIFY_POLL_MS = 5000;
   const RP_POLL_MS      = 15000;
@@ -411,14 +411,24 @@
   document.getElementById('btn-rp').addEventListener('click', () => {
     lastSource = 'rp';
     localStorage.setItem('last_source', 'rp');
+    // Radio Paradise app (BitLove Inc, App Store ID 517818306).
+    // Try the most likely URL scheme first; if the app isn't installed or the
+    // scheme doesn't match, fall back to the App Store page after a short delay.
+    const APP_STORE_URL = 'https://apps.apple.com/us/app/radio-paradise/id517818306';
     const start = Date.now();
-    // Try the deep link; if the app isn't installed, fall back to the App Store.
-    window.location.href = 'radiopara://';
-    setTimeout(() => {
-      if (Date.now() - start < 2500 && document.visibilityState === 'visible') {
-        window.location.href = 'https://apps.apple.com/app/radio-paradise/id423894385';
+    let fellBack = false;
+    const fallback = () => {
+      if (fellBack) return;
+      if (document.visibilityState === 'visible' && Date.now() - start < 2500) {
+        fellBack = true;
+        window.location.href = APP_STORE_URL;
       }
-    }, 1800);
+    };
+    // If the app's URL scheme is registered, the page goes to the background
+    // and visibilitychange fires — in that case we cancel the fallback.
+    document.addEventListener('visibilitychange', () => { fellBack = true; }, { once: true });
+    window.location.href = 'radioparadise://';
+    setTimeout(fallback, 1500);
   });
 
   $signin.addEventListener('click', spotifyLogin);
