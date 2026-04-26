@@ -336,21 +336,62 @@
     render();
   }
 
-  async function pollRP() {
-    try {
-      const res = await fetch('https://api.radioparadise.com/api/now_playing?chan=0', { cache: 'no-store' });
-      if (!res.ok) return;
-      const data = await res.json();
-      // Defensive: API may return slightly different field names.
-      const title  = data.title  || data.song   || data.track  || '';
-      const artist = data.artist || data.artist_name || '';
-      if (title || artist) {
-        rpTrack = { title, artist };
-        render();
+  // RP API endpoints to try in order. The first one that returns usable data wins.
+  const RP_ENDPOINTS = [
+    'https://api.radioparadise.com/api/nowplaying_list?chan=0&list_num=1',
+    'https://api.radioparadise.com/api/now_playing?chan=0',
+    'https://api.radioparadise.com/api/get_block?bitrate=4&info=true&chan=0'
+  ];
+
+  function extractRPTrack(data) {
+    if (!data || typeof data !== 'object') return null;
+
+    // Shape 1: { song: { "0": {artist, title, ...}, "1": {...} } }  (get_block)
+    if (data.song && typeof data.song === 'object') {
+      const keys = Object.keys(data.song);
+      if (keys.length) {
+        const s = data.song[keys[0]];
+        if (s && (s.title || s.artist)) {
+          return { title: s.title || '', artist: s.artist || '' };
+        }
       }
-    } catch (e) {
-      // CORS / network — silent.
     }
+
+    // Shape 2: array of song objects (nowplaying_list sometimes)
+    if (Array.isArray(data) && data.length) {
+      const s = data[0];
+      if (s && (s.title || s.artist)) {
+        return { title: s.title || '', artist: s.artist || '' };
+      }
+    }
+
+    // Shape 3: flat object with title/artist (now_playing)
+    const title  = data.title  || data.song_title || data.track || '';
+    const artist = data.artist || data.artist_name || '';
+    if (title || artist) return { title, artist };
+
+    return null;
+  }
+
+  async function pollRP() {
+    for (const url of RP_ENDPOINTS) {
+      try {
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) continue;
+        const data = await res.json();
+        const track = extractRPTrack(data);
+        if (track) {
+          rpTrack = track;
+          setStatus('');
+          render();
+          return;
+        }
+      } catch (e) {
+        // try the next endpoint
+      }
+    }
+    // All endpoints failed — surface a tiny hint in the corner.
+    setStatus('RP fetch failed');
   }
 
   // ====== Render ======
@@ -358,15 +399,12 @@
     let track = null;
     let source = '';
 
+    // Priority: actively-playing Spotify > Radio Paradise (always-on stream)
+    // > stale Spotify cache. RP wins over a paused Spotify because it
+    // represents what's actually airing right now.
     if (spotifyPlaying && spotifyTrack) {
       track = spotifyTrack;
       source = 'Spotify';
-    } else if (lastSource === 'rp' && rpTrack) {
-      track = rpTrack;
-      source = 'Radio Paradise';
-    } else if (spotifyTrack && lastSource === 'spotify') {
-      track = spotifyTrack;
-      source = 'Spotify · paused';
     } else if (rpTrack) {
       track = rpTrack;
       source = 'Radio Paradise';
