@@ -336,45 +336,57 @@
     render();
   }
 
-  // RP API endpoints to try in order. The first one that returns usable data wins.
-  const RP_ENDPOINTS = [
-    'https://api.radioparadise.com/api/nowplaying_list?chan=0&list_num=1',
-    'https://api.radioparadise.com/api/now_playing?chan=0',
-    'https://api.radioparadise.com/api/get_block?bitrate=4&info=true&chan=0'
-  ];
+  // RP "now playing" endpoint. The list_num=1 form returns the track
+  // currently airing and updates as soon as the next track starts.
+  const RP_ENDPOINT = 'https://api.radioparadise.com/api/nowplaying_list?chan=0&list_num=1';
 
-  // The RP API doesn't send CORS headers for cross-origin browsers, so we
-  // route through public CORS proxies. We try the URL directly first (in case
-  // CORS gets enabled, or one endpoint is open), then fall back to proxies.
+  // RP doesn't send CORS headers for cross-origin browsers, so we route
+  // through public CORS proxies. Direct first (in case it ever works), then
+  // proxies. Each attempt is bust-cached with a fresh timestamp so neither the
+  // browser nor the proxy serves a stale response.
   const RP_PROXIES = [
-    (url) => url, // direct
+    (url) => url,
     (url) => 'https://corsproxy.io/?' + encodeURIComponent(url),
     (url) => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url)
   ];
 
+  // Pull the most recently aired song out of whatever shape the API returns.
   function extractRPTrack(data) {
     if (!data || typeof data !== 'object') return null;
 
-    // Shape 1: { song: { "0": {artist, title, ...}, "1": {...} } }  (get_block)
+    const fromSong = (s) => (s && (s.title || s.artist))
+      ? { title: s.title || '', artist: s.artist || '' }
+      : null;
+
+    // Shape A: { "0": {artist, title, ...}, "1": {...}, ... } — numeric keys
+    // at the top level. The highest numeric key is the most recent.
+    const numericKeys = Object.keys(data).filter(k => /^\d+$/.test(k));
+    if (numericKeys.length) {
+      const latest = numericKeys.map(Number).sort((a, b) => b - a)[0];
+      const t = fromSong(data[String(latest)]);
+      if (t) return t;
+    }
+
+    // Shape B: { song: { "0": {...}, ... } } — same idea, nested under `song`.
     if (data.song && typeof data.song === 'object') {
-      const keys = Object.keys(data.song);
+      const keys = Object.keys(data.song).filter(k => /^\d+$/.test(k));
       if (keys.length) {
-        const s = data.song[keys[0]];
-        if (s && (s.title || s.artist)) {
-          return { title: s.title || '', artist: s.artist || '' };
-        }
+        const latest = keys.map(Number).sort((a, b) => b - a)[0];
+        const t = fromSong(data.song[String(latest)]);
+        if (t) return t;
       }
+      const anyKey = Object.keys(data.song)[0];
+      const t = fromSong(data.song[anyKey]);
+      if (t) return t;
     }
 
-    // Shape 2: array of song objects (nowplaying_list sometimes)
+    // Shape C: array of song objects.
     if (Array.isArray(data) && data.length) {
-      const s = data[0];
-      if (s && (s.title || s.artist)) {
-        return { title: s.title || '', artist: s.artist || '' };
-      }
+      const t = fromSong(data[data.length - 1]) || fromSong(data[0]);
+      if (t) return t;
     }
 
-    // Shape 3: flat object with title/artist (now_playing)
+    // Shape D: flat object with title/artist directly.
     const title  = data.title  || data.song_title || data.track || '';
     const artist = data.artist || data.artist_name || '';
     if (title || artist) return { title, artist };
@@ -383,25 +395,30 @@
   }
 
   async function pollRP() {
+    // Cache-busting: append a fresh timestamp to the inner URL each call so
+    // the proxy treats every poll as a brand-new request.
+    const sep = RP_ENDPOINT.includes('?') ? '&' : '?';
+    const target = RP_ENDPOINT + sep + '_t=' + Date.now();
+
     for (const proxy of RP_PROXIES) {
-      for (const endpoint of RP_ENDPOINTS) {
-        try {
-          const res = await fetch(proxy(endpoint), { cache: 'no-store' });
-          if (!res.ok) continue;
-          const data = await res.json();
-          const track = extractRPTrack(data);
-          if (track) {
+      try {
+        const res = await fetch(proxy(target), { cache: 'no-store' });
+        if (!res.ok) continue;
+        const data = await res.json();
+        const track = extractRPTrack(data);
+        if (track) {
+          // Only re-render if the track actually changed, to avoid flicker.
+          if (!rpTrack || rpTrack.title !== track.title || rpTrack.artist !== track.artist) {
             rpTrack = track;
-            setStatus('');
             render();
-            return;
           }
-        } catch (e) {
-          // try next combination
+          setStatus('');
+          return;
         }
+      } catch (e) {
+        // try the next proxy
       }
     }
-    // All combinations failed — surface a tiny hint in the corner.
     setStatus('RP fetch failed');
   }
 
