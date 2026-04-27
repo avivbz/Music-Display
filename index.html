@@ -49,7 +49,7 @@
     padding: 0 4vw;
   }
   #title {
-    font-size: 6.5vh;
+    font-size: 7.2vh;
     font-weight: 600;
     line-height: 1.1;
     max-width: 90vw;
@@ -60,7 +60,7 @@
     -webkit-box-orient: vertical;
   }
   #artist {
-    font-size: 4.2vh;
+    font-size: 4.6vh;
     font-weight: 300;
     opacity: 0.85;
     line-height: 1.1;
@@ -80,27 +80,25 @@
   #buttons {
     flex: 0 0 auto;
     display: flex;
-    gap: 2vw;
+    gap: 6vw;
     justify-content: center;
-    align-items: stretch;
+    align-items: center;
   }
-  .btn {
-    flex: 1 1 0;
-    max-width: 28vw;
-    padding: 2.4vh 2vw;
-    font-size: 2.6vh;
-    font-weight: 500;
-    background: #161616;
-    color: #fff;
-    border: 1px solid #2a2a2a;
-    border-radius: 1.6vh;
+  .icon-btn {
+    width: 14vh;
+    height: 14vh;
+    padding: 0;
+    background: transparent;
+    border: none;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
-    transition: background 0.15s ease;
-    font-family: inherit;
+    transition: transform 0.1s ease, opacity 0.15s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
-  .btn:active { background: #2a2a2a; }
-  #btn-playpause { font-weight: 600; }
+  .icon-btn:active { transform: scale(0.93); }
+  .icon-btn svg { width: 100%; height: 100%; display: block; }
   #signin-link {
     position: fixed;
     top: 1.2vh;
@@ -139,10 +137,49 @@
   </div>
 
   <div id="buttons">
-    <button class="btn" id="btn-playpause">Play / Pause</button>
-    <button class="btn" id="btn-spotify">Open Spotify</button>
-    <button class="btn" id="btn-rp">Open Radio Paradise</button>
+    <button class="icon-btn" id="btn-playpause" aria-label="Play or pause">
+      <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="50" cy="50" r="50" fill="#1F8FE0"/>
+        <polygon points="32,28 32,72 58,50" fill="#fff"/>
+        <rect x="62" y="28" width="7" height="44" rx="1.5" fill="#fff"/>
+        <rect x="73" y="28" width="7" height="44" rx="1.5" fill="#fff"/>
+      </svg>
+    </button>
+    <button class="icon-btn" id="btn-spotify" aria-label="Open Spotify">
+      <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="50" cy="50" r="50" fill="#1DB954"/>
+        <path d="M22 38 Q50 28 78 40" stroke="#000" stroke-width="9" stroke-linecap="round" fill="none"/>
+        <path d="M26 52 Q50 44 74 54" stroke="#000" stroke-width="7" stroke-linecap="round" fill="none"/>
+        <path d="M30 65 Q50 59 70 67" stroke="#000" stroke-width="5.5" stroke-linecap="round" fill="none"/>
+      </svg>
+    </button>
+    <button class="icon-btn" id="btn-rp" aria-label="Open Radio Paradise">
+      <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="rp-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#3a1f6b"/>
+            <stop offset="50%" stop-color="#6a3fa0"/>
+            <stop offset="100%" stop-color="#8094d6"/>
+          </linearGradient>
+        </defs>
+        <rect x="0" y="0" width="100" height="100" rx="22" fill="url(#rp-grad)"/>
+        <!-- Center "X" wave -->
+        <path d="M44 32 Q50 50 44 68 M56 32 Q50 50 56 68" stroke="#fff" stroke-width="5.5" stroke-linecap="round" fill="none"/>
+        <!-- Left waves -->
+        <path d="M36 38 Q30 50 36 62" stroke="#fff" stroke-width="5" stroke-linecap="round" fill="none"/>
+        <path d="M28 34 Q19 50 28 66" stroke="#fff" stroke-width="5" stroke-linecap="round" fill="none"/>
+        <circle cx="20" cy="50" r="4" fill="#fff"/>
+        <!-- Right waves -->
+        <path d="M64 38 Q70 50 64 62" stroke="#fff" stroke-width="5" stroke-linecap="round" fill="none"/>
+        <path d="M72 34 Q81 50 72 66" stroke="#fff" stroke-width="5" stroke-linecap="round" fill="none"/>
+        <circle cx="80" cy="50" r="4" fill="#fff"/>
+      </svg>
+    </button>
   </div>
+
+  <!-- Hidden audio element used to stream Radio Paradise from inside the page,
+       so the play/pause button can actually control playback. -->
+  <audio id="rp-audio" preload="none" crossorigin="anonymous"></audio>
 
 <script>
 (() => {
@@ -453,12 +490,81 @@
   }
 
   // ====== Buttons ======
+  // Radio Paradise streams (Main Mix). The page can play these directly via
+  // a hidden <audio> element so the play/pause button has something to control.
+  const RP_STREAM_URLS = [
+    'https://stream.radioparadise.com/aac-320',
+    'https://stream.radioparadise.com/aac-128',
+    'https://stream.radioparadise.com/mp3-192'
+  ];
+  const $rpAudio = document.getElementById('rp-audio');
+  let rpAudioPlaying = false;
+
+  function rpPlay() {
+    // Try each stream URL in turn — the browser picks the first one it can play.
+    let i = 0;
+    const tryNext = () => {
+      if (i >= RP_STREAM_URLS.length) {
+        setStatus('RP stream failed to start');
+        rpAudioPlaying = false;
+        return;
+      }
+      // Cache-bust to force a fresh stream connection.
+      $rpAudio.src = RP_STREAM_URLS[i++] + '?_=' + Date.now();
+      $rpAudio.play().then(() => {
+        rpAudioPlaying = true;
+        setStatus('');
+      }).catch(() => tryNext());
+    };
+    tryNext();
+  }
+
+  function rpPause() {
+    try { $rpAudio.pause(); } catch {}
+    $rpAudio.removeAttribute('src');
+    $rpAudio.load();
+    rpAudioPlaying = false;
+  }
+
+  $rpAudio.addEventListener('pause', () => { rpAudioPlaying = false; });
+  $rpAudio.addEventListener('playing', () => { rpAudioPlaying = true; });
+
+  // Decide which source the play/pause button should act on. We use the same
+  // priority as the display: live Spotify wins; otherwise RP (the always-on
+  // stream); otherwise whatever Spotify cached.
+  function activePlaybackSource() {
+    if (spotifyPlaying) return 'spotify';
+    if (rpAudioPlaying) return 'rp';
+    if (rpTrack)        return 'rp';     // RP is shown on screen → control RP
+    if (spotifyTrack)   return 'spotify'; // paused Spotify cache → control Spotify
+    return isAuthed() ? 'spotify' : 'rp';
+  }
+
   document.getElementById('btn-playpause').addEventListener('click', async () => {
+    const src = activePlaybackSource();
+
+    if (src === 'rp') {
+      if (rpAudioPlaying) {
+        rpPause();
+      } else {
+        // If Spotify happens to be playing, pause it first to avoid double audio.
+        if (isAuthed() && spotifyPlaying) {
+          await spotifyApi('/me/player/pause', 'PUT');
+          spotifyPlaying = false;
+        }
+        rpPlay();
+      }
+      render();
+      return;
+    }
+
+    // Spotify
     if (!isAuthed()) { spotifyLogin(); return; }
+    // If RP is playing locally, stop it before starting Spotify.
+    if (rpAudioPlaying && !spotifyPlaying) rpPause();
     const path = spotifyPlaying ? '/me/player/pause' : '/me/player/play';
     const r = await spotifyApi(path, 'PUT');
     if (r && r.needsAuth) { spotifyLogin(); return; }
-    // Optimistically toggle then re-poll for accuracy.
     spotifyPlaying = !spotifyPlaying;
     if (spotifyPlaying) {
       lastSource = 'spotify';
